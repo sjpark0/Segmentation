@@ -19,8 +19,12 @@ using namespace std;
 class CChildView : public CWnd
 {
 private:
-	vector<Mat> m_vecOuts;
-	
+	//vector<Mat> m_vecOuts;
+	vector<Mat*> m_vecObjects;
+	vector<Mat*> m_vecMasks;
+	vector<Rect*> m_vecBBoxs;
+	int          m_iSegID;
+	bool m_bIsDrawObject;
 	bool m_bIsSegment;
 	bool m_bIscomposite;
 	unsigned char *m_pSegmentImage;

@@ -24,6 +24,7 @@ CChildView::CChildView()
 	m_pBitmapInfoComp = NULL;
 	m_bIsSegment = false;
 	m_bIscomposite = false;
+	m_iSegID = -1;
 }
 
 CChildView::~CChildView()
@@ -159,6 +160,7 @@ int CChildView::SetSegmentFile(CString filename)
 	net.setPreferableTarget(DNN_TARGET_CPU);
 
 	Mat blobImg;
+	vector<Mat> outs;
 	blobImg = blobFromImage(img, 1.0, Size(img.cols, img.rows), Scalar(0, 0, 0), false, false, CV_32F);
 
 	net.setInput(blobImg);
@@ -166,8 +168,66 @@ int CChildView::SetSegmentFile(CString filename)
 	outNames[0] = "detection_out_final";
 	outNames[1] = "detection_masks";
 	
-	net.forward(m_vecOuts, outNames);
+	net.forward(outs, outNames);
 	
+	Mat outDetections = outs[0];
+	Mat outMasks = outs[1];
+
+	const int numDetections = outDetections.size[2];
+	const int numClasses = outMasks.size[1];
+	char tmpFilename[1024];
+	outDetections = outDetections.reshape(1, outDetections.total() / 7);
+	for (int i = 0; i < numDetections; ++i)
+	{
+		float score = outDetections.at<float>(i, 2);
+		if (score > 0.5)
+		{
+			// Extract the bounding box
+			int classId = static_cast<int>(outDetections.at<float>(i, 1));
+			int left = static_cast<int>(m_iSegmentWidth * outDetections.at<float>(i, 3));
+			int top = static_cast<int>(m_iSegmentHeight * outDetections.at<float>(i, 4));
+			int right = static_cast<int>(m_iSegmentWidth * outDetections.at<float>(i, 5));
+			int bottom = static_cast<int>(m_iSegmentHeight * outDetections.at<float>(i, 6));
+
+			if (classId != 0) continue;
+
+			left = max(0, min(left, m_iSegmentWidth - 1));
+			top = max(0, min(top, m_iSegmentHeight - 1));
+			right = max(0, min(right, m_iSegmentWidth - 1));
+			bottom = max(0, min(bottom, m_iSegmentHeight - 1));
+			//printf("%d, %d, %d, %d, %d\n", left, top, right, bottom, classId);
+			Rect *box = new Rect(left, top, right - left + 1, bottom - top + 1);
+			// Extract the mask for the object
+			Mat objectMask(outMasks.size[2], outMasks.size[3], CV_32F, outMasks.ptr<float>(i, classId));
+			resize(objectMask, objectMask, Size(box->width, box->height));
+			Mat mask = (objectMask > 0.7);
+			Mat *objMask = new Mat();
+			mask.convertTo(*objMask, CV_8U);
+			
+			Mat *img = new Mat(box->height, box->width, CV_8UC3, cv::Scalar(0, 0, 0));
+			Mat tmpImg(m_iSegmentHeight, m_iSegmentWidth, CV_8UC3, m_pSegmentImage);
+			(tmpImg(*box)).copyTo(*img, *objMask);
+
+			sprintf_s(tmpFilename, "%d.jpg", i);
+			imwrite(tmpFilename, *img);
+			m_vecBBoxs.push_back(box);
+			m_vecObjects.push_back(img);
+			m_vecMasks.push_back(objMask);
+			//Mat img(m_iSegmentHeight, m_iSegmentWidth, CV_8UC3, m_pSegmentImage);
+			//Scalar color = Scalar(255, 0, 0);
+			//Mat coloredRoi = (0.99 * color + 0.01 * img(box));
+			//coloredRoi.convertTo(coloredRoi, CV_8UC3);
+			//coloredRoi.copyTo(img(box), mask);
+
+			
+
+			//resize(objectMask, objectMask, Size(box.width, box.height));
+
+
+			// Draw bounding box, colorize and show the mask on the image
+
+		}
+	}
 	Invalidate();
 	return 0;
 }
@@ -236,6 +296,7 @@ int CChildView::DeallocationAll()
 	}
 	m_bIsSegment = false;
 	m_bIscomposite = false;
+	m_iSegID = -1;
 	return 0;
 }
 
@@ -243,62 +304,49 @@ int CChildView::DeallocationAll()
 void CChildView::OnLButtonDown(UINT nFlags, CPoint point)
 {
 	// TODO: 여기에 메시지 처리기 코드를 추가 및/또는 기본값을 호출합니다.
+	int x, y;
+	//m_iSegID = -1;
 	if (m_bIsSegment && point.x < m_iScreenSegWidth) {
-		Mat outDetections = m_vecOuts[0];
-		Mat outMasks = m_vecOuts[1];
-
-		const int numDetections = outDetections.size[2];
-		const int numClasses = outMasks.size[1];
-
-		outDetections = outDetections.reshape(1, outDetections.total() / 7);
-		for (int i = 0; i < numDetections; ++i)
-		{
-			float score = outDetections.at<float>(i, 2);
-			if (score > 0.5)
-			{
-				// Extract the bounding box
-				int classId = static_cast<int>(outDetections.at<float>(i, 1));
-				int left = static_cast<int>(m_iSegmentWidth * outDetections.at<float>(i, 3));
-				int top = static_cast<int>(m_iSegmentHeight * outDetections.at<float>(i, 4));
-				int right = static_cast<int>(m_iSegmentWidth * outDetections.at<float>(i, 5));
-				int bottom = static_cast<int>(m_iSegmentHeight * outDetections.at<float>(i, 6));
-
-				if (classId != 0) continue;
-
-				left = max(0, min(left, m_iSegmentWidth - 1));
-				top = max(0, min(top, m_iSegmentHeight - 1));
-				right = max(0, min(right, m_iSegmentWidth - 1));
-				bottom = max(0, min(bottom, m_iSegmentHeight - 1));
-				//printf("%d, %d, %d, %d, %d\n", left, top, right, bottom, classId);
-				if (point.x * m_iSegmentWidth / m_iScreenSegWidth > left && point.x * m_iSegmentWidth / m_iScreenSegWidth < right && point.y * m_iSegmentHeight / m_iScreenSegHeight > top && point.y * m_iSegmentHeight / m_iScreenSegHeight < bottom) {
-					Rect box = Rect(left, top, right - left + 1, bottom - top + 1);
-					// Extract the mask for the object
-					Mat objectMask(outMasks.size[2], outMasks.size[3], CV_32F, outMasks.ptr<float>(i, classId));
-					resize(objectMask, objectMask, Size(box.width, box.height));
-					Mat mask = (objectMask > 0.7);
-					mask.convertTo(mask, CV_8U);
-					Mat img(m_iSegmentHeight, m_iSegmentWidth, CV_8UC3, m_pSegmentImage);
-					Scalar color = Scalar(255, 0, 0);
-					Mat coloredRoi = (0.99 * color + 0.01 * img(box));
-					coloredRoi.convertTo(coloredRoi, CV_8UC3);
-					coloredRoi.copyTo(img(box), mask);
-
-					Invalidate();
-				}
-				
-				//resize(objectMask, objectMask, Size(box.width, box.height));
-
-
-				// Draw bounding box, colorize and show the mask on the image
-				
+		x = point.x * m_iSegmentWidth / m_iScreenSegWidth;
+		y = point.y * m_iSegmentHeight / m_iScreenSegHeight;
+		for (int i = 0; i < m_vecBBoxs.size(); i++) {			
+			if (x >= m_vecBBoxs[i]->x && y >= m_vecBBoxs[i]->y && x < m_vecBBoxs[i]->x + m_vecBBoxs[i]->width - 1 && y < m_vecBBoxs[i]->y + m_vecBBoxs[i]->height - 1) {
+				m_iSegID = i;
+				printf("%d\n", m_iSegID);
+				break;
 			}
 		}
-	//	printf("%d, %d\n", point.x * m_iSegmentWidth / m_iScreenSegWidth, point.y * m_iSegmentHeight / m_iScreenSegHeight);
+	//	printf("%d, %d\n", point.x * m_iSegmentWidth / m_iScreenSegWidth, c);
 
 	}
 	else if(m_bIscomposite && point.x >= m_iScreenSegWidth){
-	//	printf("%d, %d\n", (point.x - m_iScreenSegWidth) * m_iCompositeWidth / m_iScreenCompWidth, point.y * m_iCompositeHeight / m_iScreenCompHeight);
+		printf("%d\n", m_iSegID);
+		if (m_iSegID >= 0) {
+			Mat mask;
+			Rect box;
+			Rect box1;
+			
+			box1.x = box1.y = 0;
+			box1.width = box.width = m_vecBBoxs[m_iSegID]->width;
+			box1.height = box.height = m_vecBBoxs[m_iSegID]->height;
 
+			box.x = MAX(0, (point.x - m_iScreenSegWidth) * m_iCompositeWidth / m_iScreenCompWidth - box.width / 2);
+			box.y = MAX(0, point.y * m_iCompositeHeight / m_iScreenCompHeight - box.height / 2);
+			
+			if (box.x + box.width > m_iCompositeWidth - 1) {
+				box1.width = box.width = m_iCompositeWidth - 1 - box.x;
+			}
+			if (box.y + box.height > m_iCompositeHeight - 1) {
+				box1.height = box.height = m_iCompositeHeight - 1 - box.y;
+			}
+			printf("%d, %d\n", box.x, box.y);
+
+			Mat tmpImg(m_iCompositeHeight, m_iCompositeWidth, CV_8UC3, m_pCompositeImage);
+			(*m_vecObjects[m_iSegID])(box1).copyTo(tmpImg(box), (*m_vecMasks[m_iSegID])(box1));
+		//	imwrite("test.jpg", *m_vecObjects[m_iSegID]);
+			m_iSegID = -1;
+			Invalidate();
+		}
 	}
 	CWnd::OnLButtonDown(nFlags, point);
 }
